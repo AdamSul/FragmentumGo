@@ -24,14 +24,14 @@ type App struct {
 }
 
 //Initialize - Initializes the database connection and routes
-func (a *App) Initialize(inipath string) {
-	var err error
+func (a *App) Initialize(inifile string) {
+        var err error
 
-	a.cfg, err = ini.Load(fmt.Sprintf("%sfragments.ini", inipath))
-	if err != nil {
-		fmt.Printf("Failed to read configuration file: %v \n", err)
-		os.Exit(1)
-	}
+        a.cfg, err = ini.Load(inifile)
+        if err != nil {
+                fmt.Printf("Failed to read configuration file: %v \n", err)
+                os.Exit(1)
+        }
 
 	apiProtocol := a.cfg.Section("API").Key("protocol").In("http", []string{"http", "https"})
 	apiPort := a.cfg.Section("API").Key("api_port").String()
@@ -51,6 +51,9 @@ func (a *App) Initialize(inipath string) {
 	fmt.Println("DB User:", dbUser)
 	fmt.Println("DB Pwd:", dbPwd)
 	fmt.Println("Db Name:", dbName)
+
+	fragmentEntryPoint := a.cfg.Section("Fragment").Key("entry_point").String()
+	fmt.Println("Fragment Entry Point: ", fragmentEntryPoint)
 
 	connectionString := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", dbUser, dbPwd, dbAddress, dbPort, dbName)
 
@@ -77,7 +80,11 @@ func (a *App) Initialize(inipath string) {
 
 //Run - Runs the listener
 func (a *App) Run() {
-	log.Fatal(http.ListenAndServe(a.cfg.Section("API").Key("api_port").String(), a.Router))
+	if a.cfg.Section("API").Key("api_cert_file").String() != "" {
+		log.Fatal(http.ListenAndServeTLS(a.cfg.Section("API").Key("api_port").String(), a.cfg.Section("API").Key("api_cert_file").String(), a.cfg.Section("API").Key("api_key_file").String(), a.Router))
+	} else {
+		log.Fatal(http.ListenAndServe(a.cfg.Section("API").Key("api_port").String(), a.Router))
+	}
 }
 
 func respondWithError(w http.ResponseWriter, code int, message string) {
@@ -90,17 +97,6 @@ func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
 	w.WriteHeader(code)
 	w.Write(response)
 }
-
-/*
-func (a *App) createCashCoreTable(w http.ResponseWriter, r *http.Request) {
-	var u coreCash
-	if err := createCoreCashTable(a.DB); err != nil {
-		respondWithError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondWithJSON(w, http.StatusCreated, u)
-}
-*/
 
 func (a *App) renderFragments(fragmentID int) string {
 	fragmentChildren, err := getSubfragments(a.DB, fragmentID)
@@ -121,9 +117,9 @@ func (a *App) renderFragments(fragmentID int) string {
 				}
 			}
 			if subfragmentOutput.content.String == "" {
-				outString = outString + subfragmentOutput.pre.String + a.renderFragments(subfragmentOutput.ID) + subfragmentOutput.post.String + "\n"
+				outString = outString + subfragmentOutput.pre.String + "\n" + a.renderFragments(subfragmentOutput.ID) + "\n" + subfragmentOutput.post.String + "\n"
 			} else {
-				outString = outString + subfragmentOutput.pre.String + subfragmentOutput.content.String + subfragmentOutput.post.String + "\n"
+				outString = outString + subfragmentOutput.pre.String + "\n" + subfragmentOutput.content.String + "\n" + subfragmentOutput.post.String + "\n"
 			}
 		}
 	}
@@ -131,7 +127,7 @@ func (a *App) renderFragments(fragmentID int) string {
 }
 
 func (a *App) serveSPA() string {
-	fragmentOutput, err := getFragment(a.DB, 4)
+	fragmentOutput, err := getFragment(a.DB, a.cfg.Section("Fragment").Key("entry_point").MustInt(0))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return ""
@@ -140,7 +136,7 @@ func (a *App) serveSPA() string {
 		}
 	}
 
-	outString := fragmentOutput.pre.String + a.renderFragments(fragmentOutput.ID) + fragmentOutput.post.String + "\n"
+	outString := fragmentOutput.pre.String + "\n" + a.renderFragments(fragmentOutput.ID) + "\n" + fragmentOutput.post.String + "\n"
 	return outString
 }
 
@@ -149,4 +145,6 @@ func (a *App) initializeRoutes() {
 	a.Router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, a.serveSPA())
 	})
+	a.Router.PathPrefix("/assets/").Handler(http.StripPrefix("/assets/", http.FileServer(http.Dir("./assets/"))))
+
 }
